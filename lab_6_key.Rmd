@@ -17,8 +17,9 @@ library(janitor)
 library(raster)
 library(sf)
 library(tmap)
+library(tmaptools)
 library(gstat) # variogram
-library(plotKML) # convert points back to raster
+
 ```
 
 ## Grand Canyon DEM 
@@ -233,27 +234,27 @@ ks_vgm_fit # Nugget = 0.102, sill = 0.954, range = 235
 
 Now, kriging! 
 ```{r}
-
 ks_krige <- krige(amt ~ 1, ks_sp, grid_sp, model=ks_vgm_fit)
 
-```
-
-And visualize it: 
-```{r}
-
-ks_krige_df <- as.data.frame(ks_krige) # View it after this to show output
-
-# Rename things to make it a little nicer
-ks_krige_2 <- ks_krige_df %>% 
-  rename(lon = coords.x1, lat = coords.x2, predicted = var1.pred, err = var1.var)
-
-# Make this into spatial data again
-rain_predicted  <-  st_as_sf(ks_krige_2, coords = c("lon", "lat"), crs = 4326)
+spplot(ks_krige, "var1.pred")
 
 ```
 
-Get state outlines & filter to just get KS:
+Let's get it back into a format we're used to (data frames & sf objects):
 ```{r}
+# Make a data frame from kriged predictions:
+ks_df <- data.frame(ks_krige@data["var1.pred"], ks_krige@data["var1.var"],
+                    ks_krige@coords) %>% 
+  rename(longitude = coords.x1,
+         latitude = coords.x2)
+
+# Convert to sf object: 
+rain_sf <- st_as_sf(ks_df, coords = c("longitude","latitude"))
+st_crs(rain_sf) <- 4326
+```
+
+```{r}
+
 # Get Kansas outline to crop: 
 ks <- read_sf(dsn = here("data","states"), 
               layer = "cb_2017_us_state_20m") %>% 
@@ -261,42 +262,18 @@ ks <- read_sf(dsn = here("data","states"),
   filter(NAME == "Kansas") %>% 
   st_transform(crs = 4326)
 
-# Crop the rainfall data
-rain_cropped <- st_intersection(rain_predicted, ks)
-
-# Initial plot
-plot(rain_cropped) # But this is points
-
-# So is this (cheating...)
-# tmap: 
-  tm_shape(rain_cropped) +
-  tm_dots("predicted", size = 0.05) +
-  tm_shape(ks_counties) +
-  tm_borders() +
-    tm_layout(legend.bg.color = "white", legend.position = c("left","bottom"))
+plot(ks)
 
 ```
 
-Extra...converting sf points to Spatial points to raster (with plotKML package): 
-
 ```{r}
+# Find the intersection of the two: 
+rain_sf_ks <- st_intersection(rain_sf, ks)
 
-# Convert sf object to spatial points
-rain_pts <- as_Spatial(rain_cropped)
-class(rain_pts)
-
-# Rasterize spatial points, make class 'Raster'
-rain_raster <- vect2rast(rain_pts, cell.size = 0.01)
-rain_raster2 <- raster(rain_raster)
-
-# Need to aggregate so it's not just tiny cells (and white space)
-rain_raster_agg <- raster::aggregate(rain_raster2, fact = 5, fun = mean)
-
-tm_shape(rain_raster_agg) +
-  tm_raster() +
-  tm_shape(ks_counties) +
-  tm_borders() +
-    tm_layout(legend.bg.color = "white", legend.position = c("left","bottom"))
+ggplot(rain_sf_ks) +
+  geom_sf(aes(color = var1.pred)) +
+  scale_color_gradientn(colors = c("white","yellow","magenta","purple")) +
+  theme_minimal()
 
 ```
 
